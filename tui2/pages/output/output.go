@@ -39,12 +39,12 @@ type Output struct {
 	highBlock uint64
 
 	blocksPerModule map[string][]uint64
-	payloads        map[blockContext]*pbsubstreamsrpc.AnyModuleOutput
+	payloads        map[request.BlockContext]*pbsubstreamsrpc.AnyModuleOutput
 
 	blockIDs map[uint64]string
 
-	active            blockContext // module + block
-	outputViewYoffset map[blockContext]int
+	active            request.BlockContext // module + block
+	outputViewYoffset map[request.BlockContext]int
 	searchInput       textinput.Model
 	searchCtx         searchCtx
 }
@@ -58,22 +58,17 @@ type searchCtx struct {
 	matchPositions []int
 }
 
-type blockContext struct {
-	module   string
-	blockNum uint64
-}
-
 func New(c common.Common) *Output {
 	output := &Output{
 		Common:            c,
 		blocksPerModule:   make(map[string][]uint64),
-		payloads:          make(map[blockContext]*pbsubstreamsrpc.AnyModuleOutput),
+		payloads:          make(map[request.BlockContext]*pbsubstreamsrpc.AnyModuleOutput),
 		blockIDs:          make(map[uint64]string),
 		moduleSelector:    modselect.New(c),
 		blockSelector:     blockselect.New(c),
 		outputView:        viewport.New(24, 80),
 		messageFactory:    dynamic.NewMessageFactoryWithDefaults(),
-		outputViewYoffset: map[blockContext]int{},
+		outputViewYoffset: map[request.BlockContext]int{},
 	}
 	output.searchInput = textinput.New()
 	output.searchInput.Placeholder = ""
@@ -113,7 +108,7 @@ func (o *Output) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case request.NewRequestInstance:
 		o.msgDescs = msg.MsgDescs
 		o.blocksPerModule = make(map[string][]uint64)
-		o.payloads = make(map[blockContext]*pbsubstreamsrpc.AnyModuleOutput)
+		o.payloads = make(map[request.BlockContext]*pbsubstreamsrpc.AnyModuleOutput)
 		o.blockIDs = make(map[uint64]string)
 		o.outputView.SetContent("")
 	case *pbsubstreamsrpc.BlockScopedData:
@@ -134,19 +129,19 @@ func (o *Output) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 			modName := output.Name()
-			blockCtx := blockContext{
-				module:   modName,
-				blockNum: blockNum,
+			blockCtx := request.BlockContext{
+				Module:   modName,
+				BlockNum: blockNum,
 			}
 
 			if _, found := o.payloads[blockCtx]; !found {
 				o.moduleSelector.AddModule(modName)
-				if o.active.module == "" {
-					o.active.module = modName
-					o.active.blockNum = blockNum
+				if o.active.Module == "" {
+					o.active.Module = modName
+					o.active.BlockNum = blockNum
 				}
 				o.blocksPerModule[modName] = append(o.blocksPerModule[modName], blockNum)
-				if modName == o.active.module {
+				if modName == o.active.Module {
 					o.blockSelector.SetAvailableBlocks(o.blocksPerModule[modName])
 				}
 			}
@@ -156,14 +151,16 @@ func (o *Output) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case modselect.ModuleSelectedMsg:
 		//o.setViewContext()
-		o.active.module = string(msg)
-		o.blockSelector.SetAvailableBlocks(o.blocksPerModule[o.active.module])
+		o.active.Module = string(msg)
+		o.blockSelector.SetAvailableBlocks(o.blocksPerModule[o.active.Module])
 		o.outputView.YOffset = o.outputViewYoffset[o.active]
 		o.setViewportContent()
-
+		if o.searchCtx.enabled {
+			o.sendColorMessage()
+		}
 	case blockselect.BlockSelectedMsg:
 		//o.setViewContext()
-		o.active.blockNum = uint64(msg)
+		o.active.BlockNum = uint64(msg)
 		o.outputView.YOffset = o.outputViewYoffset[o.active]
 		o.setViewportContent()
 	case tea.KeyMsg:
@@ -174,6 +171,9 @@ func (o *Output) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				searchCtx.searchKeyword = keyword
 				o.searchInput.Blur()
 				cmds = append(cmds, o.toggleSearchFocus())
+				//cmds = append(cmds, o.colorBlocksFromSearch())
+				o.sendColorMessage()
+
 				//if keyword == "" {
 				//	// alternative: match the ESC key when
 				//	searchCtx.searchVisible = false
@@ -194,7 +194,11 @@ func (o *Output) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				o.searchCtx.enabled = true
 				o.searchInput.Focus()
 				o.searchInput.SetValue("")
+				if o.blockSelector.Colored {
+					o.blockSelector.Colored = false
+				}
 				cmds = append(cmds, o.toggleSearchFocus())
+
 			case "n":
 				log.Println("n pressed")
 				// update the offset based on the `positions`
@@ -231,7 +235,7 @@ func (o *Output) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 type displayContext struct {
-	blockCtx          blockContext
+	blockCtx          request.BlockContext
 	searchViewEnabled bool
 	searchKeyword     string
 	payload           *pbsubstreamsrpc.AnyModuleOutput
@@ -328,4 +332,40 @@ func (o *Output) toggleSearchFocus() tea.Cmd {
 	return func() tea.Msg {
 		return ToggleSearchFocus(true)
 	}
+}
+
+func (o *Output) colorBlocksFromSearch() tea.Cmd {
+	out := make(map[uint64]bool)
+	readBlockNums := o.blockSelector.BlocksWithData
+	_ = readBlockNums
+
+	return func() tea.Msg {
+		return request.ColorBlockView(out)
+	}
+}
+
+func (o *Output) sendColorMessage() {
+	out := make(map[uint64]bool)
+
+	readBlockNums := o.blockSelector.BlocksWithData
+	curModule := o.active.Module
+
+	for _, block := range readBlockNums {
+		blockCtx := request.BlockContext{
+			Module:   curModule,
+			BlockNum: block,
+		}
+		payload := o.payloads[blockCtx]
+		content := o.renderPayload(payload)
+
+		var pos []int
+		_, _, pos = applySearchColoring(content, o.searchCtx.searchKeyword)
+
+		if len(pos) > 0 {
+			out[blockCtx.BlockNum] = true
+		}
+
+	}
+
+	o.blockSelector.Update(request.ColorBlockView(out))
 }

@@ -21,6 +21,12 @@ import (
 )
 
 type NewRequestInstance *RequestInstance
+type ColorBlockView map[uint64]bool
+
+type BlockContext struct {
+	Module   string
+	BlockNum uint64
+}
 
 type RequestConfig struct {
 	ManifestPath                string

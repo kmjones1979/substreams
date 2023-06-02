@@ -11,9 +11,9 @@ import (
 
 	"github.com/streamingfast/bstream/hub"
 	"github.com/streamingfast/bstream/stream"
+	bsstream "github.com/streamingfast/bstream/stream"
 	"github.com/streamingfast/dauth/authenticator"
 	"github.com/streamingfast/dgrpc"
-	dgrpcserver "github.com/streamingfast/dgrpc/server"
 	"github.com/streamingfast/dstore"
 	"github.com/streamingfast/logging"
 	tracing "github.com/streamingfast/sf-tracing"
@@ -21,16 +21,17 @@ import (
 	ttrace "go.opentelemetry.io/otel/trace"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
-	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
+	"github.com/bufbuild/connect-go"
 	"github.com/streamingfast/substreams"
 	"github.com/streamingfast/substreams/client"
 	"github.com/streamingfast/substreams/metrics"
 	"github.com/streamingfast/substreams/orchestrator/work"
 	pbsubstreamsrpc "github.com/streamingfast/substreams/pb/sf/substreams/rpc/v2"
+	ssconnect "github.com/streamingfast/substreams/pb/sf/substreams/rpc/v2/pbsubstreamsrpcconnect"
 	"github.com/streamingfast/substreams/pipeline"
 	"github.com/streamingfast/substreams/pipeline/cache"
 	"github.com/streamingfast/substreams/pipeline/exec"
@@ -44,6 +45,8 @@ import (
 )
 
 type Tier1Service struct {
+	ssconnect.UnimplementedStreamHandler
+
 	blockType          string
 	wasmExtensions     []wasm.WASMExtensioner
 	pipelineOptions    []pipeline.PipelineOptioner
@@ -62,13 +65,22 @@ type Tier1Service struct {
 var workerID atomic.Uint64
 
 func NewTier1(
+	logger *zap.Logger,
+	mergedBlocksStore dstore.Store,
+	forkedBlocksStore dstore.Store,
+	hub *hub.ForkableHub,
+
 	stateStore dstore.Store,
+	stateBundleSize uint64,
+
 	blockType string,
+
 	parallelSubRequests uint64,
 	subrequestSplitSize uint64,
+
 	substreamsClientConfig *client.SubstreamsClientConfig,
 	opts ...Option,
-) (s *Tier1Service, err error) {
+) *Tier1Service {
 
 	zlog.Info("creating gprc client factory", zap.Reflect("config", substreamsClientConfig))
 	clientFactory := client.NewInternalClientFactory(substreamsClientConfig)
@@ -84,7 +96,7 @@ func NewTier1(
 			return work.NewRemoteWorker(clientFactory, logger)
 		},
 	)
-	s = &Tier1Service{
+	s := &Tier1Service{
 		runtimeConfig:  runtimeConfig,
 		blockType:      blockType,
 		tracer:         tracing.GetTracer(),
@@ -98,7 +110,19 @@ func NewTier1(
 		opt(s)
 	}
 
-	return s, nil
+	sf := &StreamFactory{
+		mergedBlocksStore: mergedBlocksStore,
+		forkedBlocksStore: forkedBlocksStore,
+		hub:               hub,
+	}
+
+	s.streamFactoryFunc = sf.New
+	s.getRecentFinalBlock = sf.GetRecentFinalBlock
+	s.resolveCursor = pipeline.NewCursorResolver(hub, mergedBlocksStore, forkedBlocksStore)
+	s.getHeadBlock = sf.GetHeadBlock
+	s.logger = logger
+
+	return s
 }
 
 func (s *Tier1Service) BaseStateStore() dstore.Store {
@@ -109,37 +133,24 @@ func (s *Tier1Service) BlockType() string {
 	return s.blockType
 }
 
-func (s *Tier1Service) Register(
-	server dgrpcserver.Server,
-	mergedBlocksStore dstore.Store,
-	forkedBlocksStore dstore.Store,
-	forkableHub *hub.ForkableHub,
-	logger *zap.Logger) {
-
-	sf := &StreamFactory{
-		mergedBlocksStore: mergedBlocksStore,
-		forkedBlocksStore: forkedBlocksStore,
-		hub:               forkableHub,
-	}
-
-	s.streamFactoryFunc = sf.New
-	s.getRecentFinalBlock = sf.GetRecentFinalBlock
-	s.resolveCursor = pipeline.NewCursorResolver(forkableHub, mergedBlocksStore, forkedBlocksStore)
-	s.getHeadBlock = sf.GetHeadBlock
-	s.logger = logger
-	server.RegisterService(func(gs grpc.ServiceRegistrar) {
-		pbsubstreamsrpc.RegisterStreamServer(gs, s)
-	})
-}
-
-func (s *Tier1Service) Blocks(request *pbsubstreamsrpc.Request, streamSrv pbsubstreamsrpc.Stream_BlocksServer) (grpcError error) {
+func (s *Tier1Service) Blocks(
+	ctx context.Context,
+	req *connect.Request[pbsubstreamsrpc.Request],
+	stream *connect.ServerStream[pbsubstreamsrpc.Response],
+) (grpcError error) {
 	// We keep `err` here as the unaltered error from `blocks` call, this is used in the EndSpan to record the full error
 	// and not only the `grpcError` one which is a subset view of the full `err`.
 	var err error
-	ctx := streamSrv.Context()
 
 	logger := reqctx.Logger(ctx).Named("tier1")
-	respFunc := responseHandler(logger, streamSrv)
+	respFunc := func(anyResp substreams.ResponseFromAnyTier) error {
+		resp := anyResp.(*pbsubstreamsrpc.Response)
+		if err := stream.Send(resp); err != nil {
+			logger.Info("unable to send block probably due to client disconnecting", zap.Error(err))
+			return status.Error(codes.Unavailable, err.Error())
+		}
+		return nil
+	}
 
 	ctx = logging.WithLogger(ctx, logger)
 	ctx = reqctx.WithTracer(ctx, s.tracer)
@@ -148,9 +159,6 @@ func (s *Tier1Service) Blocks(request *pbsubstreamsrpc.Request, streamSrv pbsubs
 	defer span.EndWithErr(&err)
 
 	span.SetAttributes(attribute.Int64("substreams.tier", 1))
-
-	hostname := updateStreamHeadersHostname(streamSrv.SetHeader, logger)
-	span.SetAttributes(attribute.String("hostname", hostname))
 
 	if bytesMeter := tracking.GetBytesMeter(ctx); bytesMeter != nil {
 		// WARN: we shouldn't mutate this object. It's globally shared.
@@ -161,6 +169,7 @@ func (s *Tier1Service) Blocks(request *pbsubstreamsrpc.Request, streamSrv pbsubs
 		//s.runtimeConfig.BaseObjectStore.SetMeter(bytesMeter)
 	}
 
+	request := req.Msg
 	if request.Modules == nil {
 		return status.Error(codes.InvalidArgument, "missing modules in request")
 	}
@@ -183,12 +192,12 @@ func (s *Tier1Service) Blocks(request *pbsubstreamsrpc.Request, streamSrv pbsubs
 	logger.Info("incoming Substreams Blocks request", fields...)
 
 	if err := outputmodules.ValidateTier1Request(request, s.blockType); err != nil {
-		return toGRPCError(stream.NewErrInvalidArg(fmt.Errorf("validate request: %w", err).Error()))
+		return toGRPCError(bsstream.NewErrInvalidArg(fmt.Errorf("validate request: %w", err).Error()))
 	}
 
 	outputGraph, err := outputmodules.NewOutputModuleGraph(request.OutputModule, request.ProductionMode, request.Modules)
 	if err != nil {
-		return stream.NewErrInvalidArg(err.Error())
+		return bsstream.NewErrInvalidArg(err.Error())
 	}
 
 	requestID := fmt.Sprintf("%s:%d:%d:%s:%t:%t:%s",

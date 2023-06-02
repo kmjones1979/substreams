@@ -12,3 +12,5 @@ var BlockEndProcess = MetricSet.NewCounter("substreams_block_process_end_counter
 var SquashesLaunched = MetricSet.NewCounter("substreams_total_squashes_launched", "Counter for Total squashes launched, used for rate")
 var SquashersStarted = MetricSet.NewCounter("substreams_total_squash_processes_launched", "Counter for Total squash processes launched, used for rate")
 var SquashersEnded = MetricSet.NewCounter("substreams_total_squash_processes_closed", "Counter for Total squash processes closed, used for active processes")
+
+var AppReadiness = MetricSet.NewAppReadiness("firehose")

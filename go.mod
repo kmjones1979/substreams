@@ -41,6 +41,7 @@ require (
 	github.com/iancoleman/strcase v0.2.0
 	github.com/ipfs/go-ipfs-api v0.6.0
 	github.com/itchyny/gojq v0.12.12
+	github.com/lithammer/dedent v1.1.0
 	github.com/manifoldco/promptui v0.9.0
 	github.com/mattn/go-isatty v0.0.17
 	github.com/mitchellh/go-testing-interface v1.14.1
@@ -50,7 +51,7 @@ require (
 	github.com/rs/cors v1.8.3
 	github.com/schollz/closestmatch v2.1.0+incompatible
 	github.com/shopspring/decimal v1.3.1
-	github.com/streamingfast/dauth v0.0.0-20221027185237-b209f25fa3ff
+	github.com/streamingfast/dauth v0.0.0-20230609021534-e6a5970f5210
 	github.com/streamingfast/dbin v0.0.0-20210809205249-73d5eca35dc5
 	github.com/streamingfast/dhttp v0.0.2-0.20220314180036-95936809c4b8
 	github.com/streamingfast/dmetrics v0.0.0-20221107142404-e88fe183f07d
@@ -136,7 +137,6 @@ require (
 	github.com/libp2p/go-buffer-pool v0.1.0 // indirect
 	github.com/libp2p/go-flow-metrics v0.1.0 // indirect
 	github.com/libp2p/go-libp2p v0.26.3 // indirect
-	github.com/lithammer/dedent v1.1.0 // indirect
 	github.com/logrusorgru/aurora v2.0.3+incompatible // indirect
 	github.com/lucasb-eyer/go-colorful v1.2.0 // indirect
 	github.com/magiconair/properties v1.8.1 // indirect

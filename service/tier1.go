@@ -186,8 +186,8 @@ func (s *Tier1Service) Blocks(
 	}
 	fields = append(fields, zap.Bool("production_mode", request.ProductionMode))
 	auth := authenticator.GetCredentials(ctx)
-	if id := auth.GetUserID(); id != "" {
-		fields = append(fields, zap.String("user_id", id))
+	if id := auth.Identification(); id != nil {
+		fields = append(fields, zap.String("user_id", id.UserId))
 	}
 	logger.Info("incoming Substreams Blocks request", fields...)
 
@@ -210,7 +210,8 @@ func (s *Tier1Service) Blocks(
 		strings.Join(request.DebugInitialStoreSnapshotForModules, ","),
 	)
 
-	if err := s.errorFromRecordedFailure(requestID); err != nil {
+	//	s.resolveCursor
+	if err := s.errorFromRecordedFailure(requestID, request.ProductionMode, request.StartBlockNum, request.StartCursor); err != nil {
 		logger.Debug("failing fast on known failing request", zap.String("request_id", requestID))
 		return err
 	}

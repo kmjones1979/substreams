@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## Unreleased
 
+### Changed
+
+* The `substreams protogen` command now uses this Buf plugin https://buf.build/community/neoeinstein-prost to generate the Rust code for your Substreams definitions.
+
+* The `substreams protogen` command no longer generate the `FILE_DESCRIPTOR_SET` constant which generates an unsued warning in Rust. We don't think nobody relied on having the `FILE_DESCRIPTOR_SET` constant generated, but if it's the case, you can provide your own `buf.gen.yaml` that will be used instead of the generated one when doing `substreams protogen`.
+
+* The **tier2 logs** no longer show a `parent_trace_id`: the `trace_id` is now the same as tier1 jobs. Unique tier2 jobs can be distinguished by their `stage` and `segment`, corresponding to the `output_module_name` and `startblock:stopblock`
+
+### Fixed
+
+* Fixed generated `buf.gen.yaml` not being deleted when an error occurs while generating the Rust code.
+
+## [v1.1.5](https://github.com/streamingfast/substreams/releases/tag/v1.1.5)
+
 ### Highlights
 
 This release fixes data determinism issues. This comes at a 20% performance cost but is necessary for integration with The Graph ecosystem.
@@ -14,7 +28,7 @@ This release fixes data determinism issues. This comes at a 20% performance cost
 
 * When upgrading a substreams server to this version, you should delete all existing module caches to benefit from deterministic output
 
-### Added 
+### Added
 
 * Tier1 now records deterministic failures in wasm, "blacklists" identical requests for 10 minutes (by serving them the same InvalidArgument error) with a forced incremental backoff. This prevents accidental bad actors from hogging tier2 resources when their substreams cannot go passed a certain block.
 * Tier1 now sends the ResolvedStartBlock, LinearHandoffBlock and MaxJobWorkers in SessionInit message for the client and gui to show
@@ -25,6 +39,7 @@ This release fixes data determinism issues. This comes at a 20% performance cost
 * When talking to an updated server, the gui will not overflow on a negative start block, using the newly available resolvedStartBlock instead.
 * When running in development mode with a start-block in the future on a cold cache, you would sometimes get invalid "updates" from the store passed down to your modules that depend on them. It did not impact the caches but caused invalid output.
 * The WASM engine was incorrectly reusing memory, preventing deterministic output. It made things go faster, but at the cost of determinism. Memory is now reset between WASM executions on each block.
+* The GUI no longer panics when an invalid output-module is given as argument
 
 ### Changed
 

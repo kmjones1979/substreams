@@ -6,6 +6,7 @@ import (
 	"io"
 	"sync/atomic"
 
+	"github.com/streamingfast/dauth/grpc"
 	"github.com/streamingfast/substreams"
 	"github.com/streamingfast/substreams/client"
 	pbssinternal "github.com/streamingfast/substreams/pb/sf/substreams/intern/v2"
@@ -98,6 +99,7 @@ func (w *RemoteWorker) Work(ctx context.Context, request *pbssinternal.ProcessRa
 	}
 
 	ctx = metadata.NewOutgoingContext(ctx, metadata.New(map[string]string{"substreams-partial-mode": "true"}))
+	ctx = metadata.AppendToOutgoingContext(ctx, grpc.IdentityFromContext(ctx).KVString()...)
 
 	w.logger.Info("launching remote worker",
 		zap.Int64("start_block_num", int64(request.StartBlockNum)),

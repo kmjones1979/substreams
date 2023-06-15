@@ -17,7 +17,14 @@ func tier1SendMetering(ctx context.Context, logger *zap.Logger, endpoint string,
 	bytesRead := meter.BytesReadDelta()
 	bytesWritten := meter.BytesWrittenDelta()
 
+	// TODO: get user data
+	var userID, apiKeyID, ipAddress string
+
 	event := dmetering.Event{
+		UserID:    userID,
+		ApiKeyID:  apiKeyID,
+		IpAddress: ipAddress,
+
 		Endpoint: endpoint,
 		Metrics: map[string]float64{
 			"egress_bytes":  float64(proto.Size(resp)),
@@ -38,7 +45,14 @@ func tier2SendMetering(ctx context.Context, logger *zap.Logger, endpoint string,
 	bytesRead := meter.BytesReadDelta()
 	bytesWritten := meter.BytesWrittenDelta()
 
+	// TODO: get user data
+	var userID, apiKeyID, ipAddress string
+
 	event := dmetering.Event{
+		UserID:    userID,
+		ApiKeyID:  apiKeyID,
+		IpAddress: ipAddress,
+
 		Endpoint: endpoint,
 		Metrics: map[string]float64{
 			"egress_bytes":  float64(proto.Size(resp)),
